@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include "iniman.h"
 
 #define VALUE_LEN 512
@@ -56,11 +57,13 @@ int main(int argc, char **argv)
         filename = argv[2];
     }
 
+    InitPrivateProfile(NULL);
+
     switch (mode)
     {
         case MODE_WRITE:
             WritePrivateProfileString(section, entry, value, filename);
-            FlushPrivateProfile();
+            FlushAllPrivateProfile();
             break;
 
         case MODE_GET:
@@ -70,12 +73,12 @@ int main(int argc, char **argv)
         
         case MODE_DEL_ENT:
             DeletePrivateProfileEntry(section, entry, filename);
-            FlushPrivateProfile();
+            FlushAllPrivateProfile();
             break;
 
         case MODE_DEL_SEC:
             DeletePrivateProfileSection(section, filename);
-            FlushPrivateProfile();
+            FlushAllPrivateProfile();
             break;
 
         default:

@@ -16,12 +16,44 @@ This file is part of iniman
     along with iniman.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <stdbool.h>
+typedef struct 
+{
+    char        *name;
+    char        *value;
+} INIentry;
 
+typedef struct 
+{
+    char        *name;
+    INIentry    *entries;
+    short int   entryCnt;
+} INIsection;
+
+typedef struct
+{
+    char        *name;
+    FILE        *file;
+    INIsection  *sections;
+    bool        backup;
+    short int   sectionCnt;
+} INIfile;
+
+typedef struct
+{
+    INIfile     *files;
+    short int   fileCnt;
+} INIman;
+
+#ifndef __MINGW32__
 int GetPrivateProfileString(char *, char *, char *, char *, int , char *);
 int WritePrivateProfileString(char *, char *, char *, char *);
 int GetPrivateProfileInt(char *, char *, int , char *);
+#endif
+INIman *InitPrivateProfile(INIman *);
 int WritePrivateProfileInt(char *, char *, int , char *);
 bool DeletePrivateProfileEntry(char *, char *, char *);
 bool DeletePrivateProfileSection(char *, char *);
-void FlushPrivateProfile(void);
+void FlushPrivateProfile(char *);
+void FlushAllPrivateProfile(void);
+bool DuplicatePrivateProfile(char *, char *);
+void SetBackupPrivateProfile(char *);

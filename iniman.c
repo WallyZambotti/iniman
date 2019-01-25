@@ -22,36 +22,13 @@ This file is part of iniman
 #include <string.h>
 #include <sys/types.h>
 #include <regex.h>
+#include <stdbool.h>
 #include "iniman.h"
 
 #define MAX_LINE_LEN 512
 
-typedef struct 
-{
-    char        *name;
-    char        *value;
-} INIentry;
-
-typedef struct 
-{
-    char        *name;
-    INIentry    *entries;
-    short int   entryCnt;
-} INIsection;
-
-typedef struct 
-{
-    char        *name;
-    FILE        *file;
-    INIsection  *sections;
-    bool        dirty;
-    short int   sectionCnt;
-} INIfile;
-
-static INIfile inifile = 
-{
-    NULL, NULL, NULL, false, 0
-};
+static INIman _iniman = { NULL, 0 };
+static INIman *iniman = NULL;
 
 static int readline(FILE *fp, char *bp)
 {   char c = '\0';
@@ -73,18 +50,36 @@ static int readline(FILE *fp, char *bp)
 
 #define SECTIONBUCKETSIZE 128
 #define ENTRYBUCKETSIZE 32
+#define FILEBUCKETSIZE 8
 
-static INIsection *recordSection(char *iniline)
+static INIfile *recordFile(char *filename)
 {
-    if (inifile.sectionCnt % SECTIONBUCKETSIZE == 0) 
+    if (iniman->fileCnt % FILEBUCKETSIZE == 0) 
     {
-        inifile.sections = realloc(inifile.sections, SECTIONBUCKETSIZE * sizeof(INIsection));
+        iniman->files = realloc(iniman->files, FILEBUCKETSIZE * sizeof(INIman));
+    }
+
+    iniman->files[iniman->fileCnt].name = strdup(filename);
+    iniman->files[iniman->fileCnt].sections = NULL;
+    iniman->files[iniman->fileCnt].sectionCnt = 0;
+    iniman->files[iniman->fileCnt].file = NULL;
+    iniman->files[iniman->fileCnt].backup = false;
+
+    return &iniman->files[iniman->fileCnt++];
+}
+
+static INIsection *recordSection(INIfile *inifile, char *section)
+{
+    if (inifile->sectionCnt % SECTIONBUCKETSIZE == 0) 
+    {
+        inifile->sections = realloc(inifile->sections, SECTIONBUCKETSIZE * sizeof(INIsection));
     }
         
-    inifile.sections[inifile.sectionCnt].name = strdup(iniline);
-    inifile.sections[inifile.sectionCnt].entries = NULL;
+    inifile->sections[inifile->sectionCnt].name = strdup(section);
+    inifile->sections[inifile->sectionCnt].entries = NULL;
+    inifile->sections[inifile->sectionCnt].entryCnt = 0;
 
-    return &inifile.sections[inifile.sectionCnt++];
+    return &inifile->sections[inifile->sectionCnt++];
 }
 
 static void *recordEntry(INIsection *section, char *name, char *value)
@@ -100,55 +95,155 @@ static void *recordEntry(INIsection *section, char *name, char *value)
     return &section->entries[section->entryCnt++];
 }
 
-static bool saveINIfile(bool freemem)
+static void BackupINIfile(INIfile *inifile)
+{
+    if (!inifile->backup) return;
+
+#define BUF_SIZE 1024
+
+    FILE *inputFd, *outputFd;
+    size_t numRead;
+    char buf[BUF_SIZE];
+    char backupininame[256];
+
+    /* Open input and output files */
+
+    inputFd = fopen(inifile->name, "rb");
+    if (inputFd == NULL)
+    {
+        printf("iniman : backup error opening ini file %s", inifile->name);
+    }
+
+    strcpy(backupininame, inifile->name);
+    strcat(backupininame, "_bck");
+
+    outputFd = fopen(backupininame, "wb");
+    if (outputFd == NULL)
+    {
+        printf("iniman : backup error opening backup file %s", backupininame);
+    }
+
+    /* Transfer data until we encounter end of input or an error */
+
+    while ((numRead = fread(buf, 1, BUF_SIZE, inputFd)) > 0)
+    {
+        if (fwrite(buf, 1, numRead, outputFd) != numRead)
+        {
+            printf("iniman : error while writing backup\n");
+        }
+    }
+
+    if (ferror(outputFd))
+    {
+        printf("iniman : error while writing backup\n");
+    }
+
+    if (fclose(inputFd))
+    {
+        printf("iniman : error closing ini\n");
+    }
+
+    if (fclose(outputFd) == -1)
+    {
+        printf("iniman : error closing backup\n");
+    }
+
+    inifile->backup = false; // Only backup once!
+}
+
+static bool saveINIfile(INIfile *inifile, bool freemem)
 {
     int isection, ientry;
 
-    if ((inifile.file = fopen(inifile.name, "w")) == NULL)
+    if (inifile == NULL) return false;
+
+    if (freemem) BackupINIfile(inifile);
+
+    if ((inifile->file = fopen(inifile->name, "w")) == NULL)
     {
         return false;
     }
 
-    for(isection = 0 ; isection < inifile.sectionCnt ; isection++)
+    for(isection = 0 ; isection < inifile->sectionCnt ; isection++)
     {
-        if (inifile.sections[isection].name != NULL)
+        if (inifile->sections[isection].name != NULL)
         {
-            fprintf(inifile.file, "%s\n", inifile.sections[isection].name); 
+            fprintf(inifile->file, "%s\n", inifile->sections[isection].name); 
         }
 
-        for(ientry = 0 ; ientry < inifile.sections[isection].entryCnt ; ientry++)
+        for(ientry = 0 ; ientry < inifile->sections[isection].entryCnt ; ientry++)
         {
-            if (inifile.sections[isection].entries[ientry].name != NULL)
+            if (inifile->sections[isection].entries[ientry].name != NULL)
             {
-                fprintf(inifile.file, "%s=%s\n", 
-                    inifile.sections[isection].entries[ientry].name,
-                    inifile.sections[isection].entries[ientry].value);
+                fprintf(inifile->file, "%s=%s\n", 
+                    inifile->sections[isection].entries[ientry].name,
+                    inifile->sections[isection].entries[ientry].value);
 
                 if (freemem)
                 {
-                    free(inifile.sections[isection].entries[ientry].name);
+                    free(inifile->sections[isection].entries[ientry].name);
+                    inifile->sections[isection].entries[ientry].name = NULL;
                 }
             }
 
             if (freemem)
             {
-                free(inifile.sections[isection].entries[ientry].value);                
+                free(inifile->sections[isection].entries[ientry].value);        
+                inifile->sections[isection].entries[ientry].value = NULL;        
             }
         }
 
-        if (freemem && inifile.sections[isection].name != NULL)
+        if (freemem && inifile->sections[isection].name != NULL)
         {
-            free(inifile.sections[isection].name);
+            free(inifile->sections[isection].name);
+            inifile->sections[isection].name = NULL;
+            inifile->sections[isection].entryCnt = 0;
+            free(inifile->sections[isection].entries);
+            inifile->sections[isection].entries = NULL;
         }
     }
 
-    fclose(inifile.file);
-    free(inifile.name);
-    inifile.name = NULL;
+    fclose(inifile->file);
+
+    if (freemem)
+    {
+        free(inifile->name);
+        inifile->name = NULL;
+        inifile->sectionCnt = 0;
+        free(inifile->sections);
+        inifile->sections = NULL;
+    }
+    
     return true;
 }
 
-static bool loadINIfile(char *name)
+static INIfile *searchFile(char *filename)
+{
+    int ifile;
+
+    for (ifile = 0 ; ifile < iniman->fileCnt ; ifile++)
+    {
+        if (! strcmp(iniman->files[ifile].name, filename))
+        {
+            return (&iniman->files[ifile]);
+        }
+    }
+
+    return NULL;
+}
+
+static bool INImanInitialised()
+{
+    if (iniman == NULL)
+    {
+        printf("iniman : Not Initialised!\n");
+        return false;
+    }
+
+    return true;
+}
+
+static INIfile *loadINIfile(char *name, bool DoNotAutoCreate)
 {
     char iniline[MAX_LINE_LEN];
     char dummy[1] = "";
@@ -157,37 +252,38 @@ static bool loadINIfile(char *name)
     regmatch_t entparts[4];
     INIsection *section;
 
-    if (inifile.name != NULL) 
+    if (!INImanInitialised()) return NULL;
+
+    INIfile *inifile = searchFile(name);
+
+    if (inifile != NULL || DoNotAutoCreate) return inifile;
+
+    inifile = recordFile(name);
+
+    if (inifile == NULL) return NULL;
+
+    inifile->file = fopen(inifile->name, "r");
+
+    if (inifile->file == NULL)
     {
-        if (strcmp(inifile.name, name) == 0)
+        inifile->file = fopen(inifile->name, "w");
+
+        if (inifile->file == NULL)
         {
-            return true;
+            return NULL;
         }
 
-        if (saveINIfile(true) != true)
-        {
-            fprintf(stderr, "iniman : cannot save inifile %d : %s\n", errno, inifile.name);
-            return false;
-        }
+        inifile->sectionCnt = 0;
     }
-
-    inifile.file = fopen(name, "r");
-
-    if (inifile.file == NULL)
-    {
-        return false;
-    }
-
-    inifile.name = strdup(name);
 
     regcomp(&sectexp, "^\\[[^[]*\\]", REG_EXTENDED | REG_NOSUB);
     regcomp(&entryexp, "(^[^=]*)(=)(.*)", REG_EXTENDED);
 
-    while (readline(inifile.file, iniline)) 
+    while (readline(inifile->file, iniline)) 
     {
         if (!regexec(&sectexp, iniline, 0, NULL, 0))
         {
-            section = recordSection(iniline);
+            section = recordSection(inifile, iniline);
         }
         else if (!regexec(&entryexp, iniline, 4, entparts, 0))
         {
@@ -209,20 +305,20 @@ static bool loadINIfile(char *name)
         }
     }
 
-    fclose(inifile.file);
+    fclose(inifile->file);
 
-    return true;
+    return inifile;
 }
 
-static INIsection *searchSection(char *section)
+static INIsection *searchSection(INIfile *inifile, char *section)
 {
     int isection;
 
-    for (isection = 0 ; isection < inifile.sectionCnt ; isection++)
+    for (isection = 0 ; isection < inifile->sectionCnt ; isection++)
     {
-        if (! strcmp (inifile.sections[isection].name, section))
+        if (! strcmp (inifile->sections[isection].name, section))
         {
-            return (&inifile.sections[isection]);
+            return (&inifile->sections[isection]);
         }
     }
 
@@ -246,14 +342,18 @@ static INIentry *searchEntry(INIsection *section, char *entry)
 
 int GetPrivateProfileString(char *section, char *entry, char *defaultval, char *buffer, int bufferlen, char *filename)
 {
-    if (loadINIfile(filename) != true)
+    INIfile *inifile = loadINIfile(filename, false);
+
+    if (inifile == NULL) 
     {
         fprintf(stderr, "iniman : cannot load inifile %d : %s\n", errno, filename);
-        strncpy(buffer, defaultval, bufferlen);
-        return(strlen(buffer));
+        return -1;
     }
 
-    INIsection *sectionp = searchSection(section);
+    char bracedsection[256];
+
+    sprintf(bracedsection, "[%s]", section);
+    INIsection *sectionp = searchSection(inifile, bracedsection);
 
     if (sectionp == NULL)
     {
@@ -274,22 +374,22 @@ int GetPrivateProfileString(char *section, char *entry, char *defaultval, char *
 
 int WritePrivateProfileString(char *section, char *entry, char *value, char *filename)
 {
-    if (loadINIfile(filename) != true)
+    INIfile *inifile = loadINIfile(filename, false);
+
+    if (inifile == NULL) 
     {
         fprintf(stderr, "iniman : cannot load inifile %d : %s\n", errno, filename);
-        return(0);
+        return -1;
     }
 
-    INIsection *sectionp = searchSection(section);
+    char bracedsection[256];
 
-    if (sectionp == NULL)
-    {
-        sectionp = recordSection(section);
-    }
+    sprintf(bracedsection, "[%s]", section);
+    INIsection *sectionp = searchSection(inifile, bracedsection);
 
     if (sectionp == NULL) // New Section and New Entry
     {
-        sectionp = recordSection(section);
+        sectionp = recordSection(inifile, section);
         recordEntry(sectionp, entry, value);
         return 1;
     }
@@ -330,13 +430,18 @@ int WritePrivateProfileInt(char *section, char *entry, int defaultval, char *fil
 
 bool DeletePrivateProfileEntry(char *section, char *entry, char *filename)
 {
-    if (loadINIfile(filename) != true)
+    INIfile *inifile = loadINIfile(filename, true);
+
+    if (inifile == NULL) 
     {
         fprintf(stderr, "iniman : cannot load inifile %d : %s\n", errno, filename);
-        return(0);
+        return false;
     }
 
-    INIsection *sectionp = searchSection(section);
+    char bracedsection[256];
+
+    sprintf(bracedsection, "[%s]", section);
+    INIsection *sectionp = searchSection(inifile, bracedsection);
 
     if (sectionp == NULL)
     {
@@ -360,13 +465,18 @@ bool DeletePrivateProfileEntry(char *section, char *entry, char *filename)
 
 bool DeletePrivateProfileSection(char *section, char *filename)
 {
-    if (loadINIfile(filename) != true)
+    INIfile *inifile = loadINIfile(filename, true);
+
+    if (inifile == NULL) 
     {
         fprintf(stderr, "iniman : cannot load inifile %d : %s\n", errno, filename);
-        return(0);
+        return -1;
     }
 
-    INIsection *sectionp = searchSection(section);
+    char bracedsection[256];
+
+    sprintf(bracedsection, "[%s]", section);
+    INIsection *sectionp = searchSection(inifile, bracedsection);
 
     if (sectionp == NULL)
     {
@@ -389,7 +499,89 @@ bool DeletePrivateProfileSection(char *section, char *filename)
     return true;
 }
 
-void FlushPrivateProfile(void)
+bool DuplicatePrivateProfile(char *filename, char *newfilename)
 {
-    saveINIfile(true);
+    INIfile *inifile = loadINIfile(filename, true);
+
+    if (inifile == NULL) 
+    {
+        fprintf(stderr, "iniman : cannot load inifile %d : %s\n", errno, filename);
+        return false;
+    }
+
+    INIfile *newinifile = recordFile(newfilename);
+
+    int ifile, isection;
+    size_t size;
+
+    for (ifile = 0 ; ifile < iniman->fileCnt ; ifile++)
+    {
+        if (!inifile->sectionCnt) continue;
+
+        size = ((inifile->sectionCnt%SECTIONBUCKETSIZE)+1)*SECTIONBUCKETSIZE;
+        newinifile->sections = malloc(size);
+        memcpy(newinifile->sections, inifile->sections, size);
+
+        for (isection = 0 ; isection < inifile->sectionCnt ; isection++)
+        {
+            if (!inifile->sections[isection].entryCnt) continue;
+
+            size = ((inifile->sections[isection].entryCnt%ENTRYBUCKETSIZE)+1)*ENTRYBUCKETSIZE;
+            newinifile->sections[isection].entries = malloc(size);
+            memcpy(newinifile->sections[isection].entries, inifile->sections[isection].entries, size);
+        }
+    }
+
+    return true;
+}
+
+void FlushAllPrivateProfile(void)
+{
+    if (!INImanInitialised()) return;
+
+    int ifile;
+
+    for (ifile = 0 ; ifile < iniman->fileCnt ; ifile++)
+    {
+        saveINIfile(&iniman->files[ifile], true);
+    }
+}
+
+void FlushPrivateProfile(char *filename)
+{
+    if (!INImanInitialised()) return;
+
+    INIfile *inifile = searchFile(filename);
+
+    if (inifile == NULL) return;
+
+    saveINIfile(inifile, true);
+}
+
+void SetBackupPrivateProfile(char *filename)
+{
+    if (!INImanInitialised()) return;
+
+    INIfile *inifile = searchFile(filename);
+
+    if (inifile == NULL) return;
+
+    inifile->backup = true;
+}
+
+INIman *InitPrivateProfile(INIman *inimanp)
+{
+    if (inimanp == NULL)
+    {
+        if (iniman == NULL)
+        {
+            iniman = &_iniman;
+        }
+    }
+    else if (iniman == NULL)
+    {
+        iniman = inimanp;
+    }
+
+    return iniman;
 }

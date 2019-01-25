@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/initest",
-            "args": [ "-de", "tst.ini", "[Audio]", "NewEntry" ],
+            "args": [ "-ge", "tst.ini", "Audio", "TstCard" ],
             "stopAtEntry": false, 
             "cwd": "${workspaceFolder}",
             "environment": [],
