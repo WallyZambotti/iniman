@@ -420,7 +420,7 @@ int WritePrivateProfileString(char *section, char *entry, char *value, char *fil
 
     if (sectionp == NULL) // New Section and New Entry
     {
-        sectionp = recordSection(inifile, bracedsection);
+        sectionp = recordSection(inifile, section);
         recordEntry(sectionp, entry, value);
         return 1;
     }
